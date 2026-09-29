@@ -198,12 +198,18 @@ async def on_message(message):
 
   msg_content = message.content.lower()
   if any(kelime in msg_content for kelime in dinamik_yasakli_kelimeler):
-    await message.delete()
-    await message.channel.send(
-        f"⚠️ {message.author.mention}, T.C. Kamu Düzeni uyarınca bu ifade"
-        " yasaktır!",
-        delete_after=5,
-    )
+    try:
+      await message.delete()
+    except:
+      pass
+    try:
+      await message.channel.send(
+          f"⚠️ {message.author.mention}, T.C. Kamu Düzeni uyarınca bu ifade"
+          " yasaktır!",
+          delete_after=5,
+      )
+    except:
+      pass
 
     embed = discord.Embed(
         title="⚠️ YASAKLI KELİME TESPİTİ",
@@ -231,11 +237,14 @@ async def on_message(message):
   if current_data["xp"] >= current_data["level"] * 100:
     current_data["level"] += 1
     current_data["xp"] = 0
-    await message.channel.send(
-        f"🎉 Tebrikler {message.author.mention}, **Seviye"
-        f" {current_data['level']}** rütbesine yükseldin!",
-        delete_after=5,
-    )
+    try:
+      await message.channel.send(
+          f"🎉 Tebrikler {message.author.mention}, **Seviye"
+          f" {current_data['level']}** rütbesine yükseldin!",
+          delete_after=5,
+      )
+    except:
+      pass
   kullanici_xp[user_id] = current_data
 
   await bot.process_commands(message)
@@ -246,7 +255,7 @@ async def on_message_delete(message):
   if message.author.bot:
     return
   embed = discord.Embed(
-      title="🗑️ İMHA EDİLEN EVRAK (SİLİNEN MESAJ)",
+      title="🗑 İMHA EDİLEN EVRAK (SİLİNEN MESAJ)",
       color=discord.Color.purple(),
       timestamp=datetime.datetime.now(datetime.timezone.utc),
   )
@@ -557,9 +566,6 @@ async def yasaklikelime(
       )
 
 
-# --- YENİ EKLENEN FAYDALI YÖNETİM KOMUTLARI ---
-
-
 @bot.tree.command(
     name="kurallar", description="Sunucunun resmi T.C. Anayasa kurallarını yayınlar."
 )
@@ -602,9 +608,7 @@ async def rapor(interaction: discord.Interaction, sikayet: str):
   await interaction.response.send_message(
       "✅ İhbarınız güvenli bir şekilde Siberay Log birimine iletildi.",
       ephemeral=True,
-  )
-
-
+    )
 @bot.tree.command(name="rol-ver", description="Bir vatandaşa hızlıca rol atar.")
 @app_commands.describe(vatandas="Rol verilecek üye", rol="Verilecek rol")
 @app_commands.default_permissions(manage_roles=True)
@@ -637,4 +641,94 @@ async def rolal(
         " kaldırıldı.",
         ephemeral=True,
     )
-  except Excepti
+  except Exception as e:
+    await interaction.response.send_message(
+        f"❌ Rol alma başarısız: {e}", ephemeral=True
+    )
+
+
+@bot.tree.command(
+    name="yavas-mod", description="Bulunulan kanala mesaj yavaşlatma süresi koyar."
+)
+@app_commands.describe(saniye="Saniye cinsinden yavaş mod (0 = Kapalı)")
+@app_commands.default_permissions(manage_channels=True)
+async def yavasmod(interaction: discord.Interaction, saniye: int):
+  await interaction.channel.slowmode_delay = saniye
+  await interaction.response.send_message(
+      f"⏳ Bu kanalın yavaş modu **{saniye}** saniye olarak ayarlandı."
+  )
+
+
+# --- TEMEL MODERASYON KOMUTLARI ---
+
+
+@bot.tree.command(name="temizle", description="Belirtilen miktarda mesajı siler.")
+@app_commands.describe(adet="Silinecek mesaj sayısı")
+@app_commands.default_permissions(manage_messages=True)
+async def temizle(interaction: discord.Interaction, adet: int):
+  if adet <= 0:
+    await interaction.response.send_message(
+        "Lütfen 0'dan büyük bir sayı gir!", ephemeral=True
+    )
+    return
+  await interaction.response.defer(ephemeral=True)
+  silinen = await interaction.channel.purge(limit=adet)
+  await interaction.followup.send(
+      f"Başarıyla **{len(silinen)}** evrak imha edildi!", ephemeral=True
+  )
+
+
+@bot.tree.command(name="kilitle", description="Kanalı mesaj gönderimine kapatır.")
+@app_commands.default_permissions(manage_channels=True)
+async def kilitle(interaction: discord.Interaction):
+  await interaction.channel.set_permissions(
+      interaction.guild.default_role, send_messages=False
+  )
+  await interaction.response.send_message(
+      "🔒 Kanal kamu güvenliği gereği kilitlendi."
+  )
+
+
+@bot.tree.command(name="kilit-ac", description="Kanalı tekrar iletişime açar.")
+@app_commands.default_permissions(manage_channels=True)
+async def kilit_ac(interaction: discord.Interaction):
+  await interaction.channel.set_permissions(
+      interaction.guild.default_role, send_messages=True
+  )
+  await interaction.response.send_message(
+      "🔓 Kanal kilidi açıldı, iletişim serbest."
+  )
+
+
+@bot.tree.command(
+    name="sorgula", description="Vatandaşın kimlik ve sicil kaydını gösterir."
+)
+async def sorgula(
+    interaction: discord.Interaction, vatandas: discord.Member = None
+):
+  target = vatandas or interaction.user
+  bakiye = kullanici_bakiyeleri.get(target.id, 0)
+  xp_data = kullanici_xp.get(target.id, {"xp": 0, "level": 1})
+  hesap_tarihi = target.created_at.strftime("%d.%m.%Y")
+
+  embed = discord.Embed(
+      title="🆔 T.C. VATANDAŞ KİMLİK KAYDI", color=discord.Color.blue()
+  )
+  embed.set_thumbnail(url=target.display_avatar.url)
+  embed.add_field(name="Kullanıcı", value=target.mention, inline=True)
+  embed.add_field(name="ID", value=f"`{target.id}`", inline=True)
+  embed.add_field(name="Bakiye", value=f"**{bakiye:,} ₺**", inline=True)
+  embed.add_field(
+      name="Rütbe", value=f"Seviye **{xp_data['level']}**", inline=True
+  )
+  embed.add_field(name="Hesap Açılışı", value=hesap_tarihi, inline=True)
+  await interaction.response.send_message(embed=embed)
+
+
+# BOTU ÇALIŞTIRMA
+token = os.environ.get("DISCORD_TOKEN")
+if token:
+  bot.run(token.strip())
+else:
+  print("❌ HATA: DISCORD_TOKEN bulunamadı!")
+  
