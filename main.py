@@ -2,13 +2,13 @@ import datetime
 import json
 import os
 import random
-import time
 import discord
 from discord import app_commands
 from discord.ext import commands
 from flask import Flask
 from threading import Thread
 
+# --- RENDER PORT HATASI ÖNLEME (WEB SERVICE KEEP-ALIVE) ---
 app = Flask("")
 
 
@@ -27,7 +27,9 @@ def keep_alive():
 
 
 keep_alive()
+# ---------------------------------------------------------
 
+# Bot Niyetleri (Intents)
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -36,22 +38,16 @@ intents.voice_states = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 MIN_ACCOUNT_AGE_DAYS = 15
-bot_baslangic_zamani = time.time()
 
+# --- SAHTE VERİTABANI ---
 kullanici_bakiyeleri = {}
+maas_cooldown = {}
 kullanici_xp = {}
-yetkili_puanlari = {}
-ses_giris_zamanlari = {}
-dinamik_yasakli_kelimeler = [
-    "amk",
-    "aq",
-    "oç",
-    "piç",
-    "sik",
-    "yarrak",
-    "orospu",
-]
+kullanici_yatirim = {}
+yetkili_puanlari = {}  # {user_id: {"puan": 0, "ceza": 0}}
+ses_giris_zamanlari = {}  # {user_id: datetime}
 
+# --- ÖZEL KANAL TANIMLAMALARI ---
 KANALLAR = {
     "nufus_mudurlugu": "nüfus-müdürlüğü",
     "imha_evraklar": "imha-edilen-evraklar",
@@ -64,6 +60,7 @@ KANALLAR = {
 
 
 async def ozel_kanal_logla(guild, kanal_anahtar, embed):
+  """Belirtilen özel kanala log atar."""
   kanal_adi = KANALLAR.get(kanal_anahtar)
   if not kanal_adi:
     return
@@ -77,18 +74,23 @@ async def ozel_kanal_logla(guild, kanal_anahtar, embed):
 
 @bot.event
 async def on_ready():
-  print(f"🇹🇷 {bot.user.name} Hatasız ve Kararlı Kamu Sistemi Aktif!")
+  print(f"🇹🇷 {bot.user.name} Tüm T.C. Devlet Modülleri Aktif Edildi!")
   await bot.change_presence(
       activity=discord.Activity(
           type=discord.ActivityType.watching,
-          name="T.C. Kamu Güvenliği & Denetim",
+          name="T.C. Kamu Güvenliği & Arşivler",
       )
   )
   try:
     synced = await bot.tree.sync()
-    print(f"✅ {len(synced)} Slash komutu hatasız senkronize edildi.")
+    print(f"✅ {len(synced)} Slash komutu senkronize edildi.")
   except Exception as e:
     print(f"Komut senkronizasyon hatası: {e}")
+
+
+# ==========================================
+# 🛡️ 1. EGM GUARD & NÜFUS / GİRİŞ-ÇIKIŞ SİSTEMLERİ
+# ==========================================
 
 
 @bot.event
@@ -96,6 +98,8 @@ async def on_member_join(member):
   guild = member.guild
   now = datetime.datetime.now(datetime.timezone.utc)
   account_age = (now - member.created_at).days
+
+  # Nüfus Hareketleri (Üye ve Bot Sayacı)
   toplam_uye = guild.member_count
   bot_sayisi = sum(1 for m in guild.members if m.bot)
   insan_sayisi = toplam_uye - bot_sayisi
@@ -121,11 +125,13 @@ async def on_member_join(member):
   await ozel_kanal_logla(guild, "nufus_hareketleri", nufus_hareket_embed)
 
   if account_age < MIN_ACCOUNT_AGE_DAYS:
+    egm_dm_message = (
+        "🇹🇷 **T.C. İÇİŞLERİ BAKANLIĞI - EGM GUARD**\n"
+        f"Hesap yaşı {MIN_ACCOUNT_AGE_DAYS} günden küçük olduğu için geçici"
+        " olarak engellendiniz."
+    )
     try:
-      await member.send(
-          "🇹🇷 **T.C. İÇİŞLERİ BAKANLIĞI - EGM GUARD**\nHesap yaşınız"
-          f" yetersiz ({account_age}/{MIN_ACCOUNT_AGE_DAYS} gün)."
-      )
+      await member.send(egm_dm_message)
     except:
       pass
     try:
@@ -136,6 +142,7 @@ async def on_member_join(member):
     kayitsiz_rol = discord.utils.get(guild.roles, name="Kayıtsız")
     if kayitsiz_rol:
       await member.add_roles(kayitsiz_rol)
+
     nufus_embed = discord.Embed(
         title="🆔 NÜFUS MÜDÜRLÜĞÜ - YENİ KAYIT",
         color=discord.Color.blue(),
@@ -176,28 +183,29 @@ async def on_member_remove(member):
   await ozel_kanal_logla(guild, "nufus_hareketleri", nufus_hareket_embed)
 
 
+# ==========================================
+# 📑 2. EVRAK, MESAJ VE YETKİLİ DENETİM SİSTEMİ
+# ==========================================
+
+KUFUR_LISTESI = ["amk", "aq", "oç", "piç", "sik", "yarrak", "orospu"]
+
+
 @bot.event
 async def on_message(message):
   if message.author.bot:
     return
 
   msg_content = message.content.lower()
-  if any(kelime in msg_content for kelime in dinamik_yasakli_kelimeler):
-    try:
-      await message.delete()
-    except:
-      pass
-    try:
-      await message.channel.send(
-          f"⚠️ {message.author.mention}, T.C. Kamu Düzeni uyarınca bu ifade"
-          " yasaktır!",
-          delete_after=5,
-      )
-    except:
-      pass
+  if any(kufur in msg_content for kufur in KUFUR_LISTESI):
+    await message.delete()
+    await message.channel.send(
+        f"⚠️ {message.author.mention}, T.C. Kamu Düzeni uyarınca hakaret"
+        " yasaktır!",
+        delete_after=5,
+    )
 
     embed = discord.Embed(
-        title="⚠ YASAKLI KELİME TESPİTİ",
+        title="⚠️ KÜFÜR TESPİTİ",
         color=discord.Color.dark_red(),
         timestamp=datetime.datetime.now(datetime.timezone.utc),
     )
@@ -206,10 +214,12 @@ async def on_message(message):
     await ozel_kanal_logla(message.guild, "siberay_log", embed)
     return
 
+  # Yetkili Puanlama (Mesaj başına puan artışı)
   user_id = message.author.id
   if user_id not in yetkili_puanlari:
     yetkili_puanlari[user_id] = {"puan": 0, "ceza": 0}
 
+  # Eğer kullanıcı yetkili rollerindense puan ekle
   yetkili_mi = any(
       "Yetkili" in r.name or "Yönetici" in r.name or "Mod" in r.name
       for r in message.author.roles
@@ -217,19 +227,17 @@ async def on_message(message):
   if yetkili_mi:
     yetkili_puanlari[user_id]["puan"] += 1
 
+  # Normal Seviye ve XP
   current_data = kullanici_xp.get(user_id, {"xp": 0, "level": 1})
   current_data["xp"] += random.randint(5, 15)
   if current_data["xp"] >= current_data["level"] * 100:
     current_data["level"] += 1
     current_data["xp"] = 0
-    try:
-      await message.channel.send(
-          f"🎉 Tebrikler {message.author.mention}, **Seviye"
-          f" {current_data['level']}** rütbesine yükseldin!",
-          delete_after=5,
-      )
-    except:
-      pass
+    await message.channel.send(
+        f"🎉 Tebrikler {message.author.mention}, **Seviye"
+        f" {current_data['level']}** rütbesine yükseldin!",
+        delete_after=5,
+    )
   kullanici_xp[user_id] = current_data
 
   await bot.process_commands(message)
@@ -240,14 +248,16 @@ async def on_message_delete(message):
   if message.author.bot:
     return
   embed = discord.Embed(
-      title="🗑 İMHA EDİLEN EVRAK (SİLİNEN MESAJ)",
+      title="🗑️ İMHA EDİLEN EVRAK (SİLİNEN MESAJ)",
       color=discord.Color.purple(),
       timestamp=datetime.datetime.now(datetime.timezone.utc),
   )
-  embed.add_field(name="Mesaj Sahibi", value=message.author.mention, inline=True)
+  embed.add_field(name="Mesaj Sahib", value=message.author.mention, inline=True)
   embed.add_field(name="Kanal", value=message.channel.mention, inline=True)
   embed.add_field(
-      name="İçerik", value=message.content or "Medya/Ek", inline=False
+      name="İmha Edilen İçerik",
+      value=message.content or "İçerik/Medya yok",
+      inline=False,
   )
   await ozel_kanal_logla(message.guild, "imha_evraklar", embed)
 
@@ -257,7 +267,7 @@ async def on_message_edit(before, after):
   if before.author.bot or before.content == after.content:
     return
   embed = discord.Embed(
-      title="✏ DÜZENLENEN EVRAK",
+      title="✏️ DÜZENLENEN EVRAK",
       color=discord.Color.gold(),
       timestamp=datetime.datetime.now(datetime.timezone.utc),
   )
@@ -268,11 +278,17 @@ async def on_message_edit(before, after):
   await ozel_kanal_logla(before.guild, "evrak_duzenleme", embed)
 
 
+# ==========================================
+# 🔊 3. TELSİZ DİNLEME (SES KANALI) SİSTEMİ
+# ==========================================
+
+
 @bot.event
 async def on_voice_state_update(member, before, after):
   guild = member.guild
   now = datetime.datetime.now(datetime.timezone.utc)
 
+  # Ses kanalına giriş
   if before.channel is None and after.channel is not None:
     ses_giris_zamanlari[member.id] = now
     embed = discord.Embed(
@@ -280,26 +296,35 @@ async def on_voice_state_update(member, before, after):
         color=discord.Color.green(),
         timestamp=now,
     )
-    embed.add_field(name="Personel", value=member.mention, inline=True)
+    embed.add_field(name="Personel / Vatandaş", value=member.mention, inline=True)
     embed.add_field(name="Kanal", value=after.channel.name, inline=True)
     await ozel_kanal_logla(guild, "telsiz_dinleme", embed)
 
+  # Ses kanalından çıkış veya kanal değiştirme
   elif before.channel is not None and after.channel is None:
     giris_zamani = ses_giris_zamanlari.pop(member.id, None)
-    dakika_str = "Bilinmiyor"
+    kalinan_sure_str = "Bilinmiyor"
     if giris_zamani:
       fark = now - giris_zamani
-      dakika_str = f"{int(fark.total_seconds() // 60)} dakika"
+      dakika = int(fark.total_seconds() // 60)
+      kalinan_sure_str = f"{dakika} dakika"
 
     embed = discord.Embed(
         title="📻 TELSİZ BAĞLANTISI - ÇIKIŞ",
         color=discord.Color.red(),
         timestamp=now,
     )
-    embed.add_field(name="Personel", value=member.mention, inline=True)
+    embed.add_field(name="Personel / Vatandaş", value=member.mention, inline=True)
     embed.add_field(name="Ayrıldığı Kanal", value=before.channel.name, inline=True)
-    embed.add_field(name="Süre", value=dakika_str, inline=False)
+    embed.add_field(
+        name="Telsizde Kalınan Süre", value=kalinan_sure_str, inline=False
+    )
     await ozel_kanal_logla(guild, "telsiz_dinleme", embed)
+
+
+# ==========================================
+# ⚖️ 4. MAHKEME & YETKİLİ DENETİM KOMUTLARI
+# ==========================================
 
 
 class DavaKapatButon(discord.ui.View):
@@ -315,7 +340,7 @@ class DavaKapatButon(discord.ui.View):
   async def kapat(
       self, interaction: discord.Interaction, button: discord.ui.Button
   ):
-    await interaction.response.send_message("🏛 Dava arşive kaldırılıyor...")
+    await interaction.response.send_message("🏛️ Dava arşive kaldırılıyor...")
     await interaction.channel.delete()
 
 
@@ -376,325 +401,172 @@ async def mahkemekur(ctx):
 
 
 @bot.tree.command(
-    name="kurulum",
-    description="Sunucu için gerekli tüm T.C. Kamu kanal ve rollerini kurar.",
+    name="yetkilidenetim",
+    description="Yetkililerin aylık puan ve performans durumunu gösterir.",
 )
-@app_commands.default_permissions(administrator=True)
-async def kurulum(interaction: discord.Interaction):
-  await interaction.response.defer(ephemeral=True)
-  guild = interaction.guild
-
-  roller = ["Kayıtsız", "Vatandaş", "Polis", "Yönetici"]
-  for r_adi in roller:
-    if not discord.utils.get(guild.roles, name=r_adi):
-      await guild.create_role(name=r_adi, reason="T.C. Kamu Otomatik Kurulum")
-
-  kategori = await guild.create_category("🇹🇷 T.C. KAMU DEVLET MERKEZİ")
-  kanal_listesi = [
-      "nüfus-müdürlüğü",
-      "imha-edilen-evraklar",
-      "evrak-düzenleme",
-      "nüfus-hareketleri",
-      "telsiz-dinleme",
-      "yetkili-denetim",
-      "siberay-log",
-  ]
-  for k_adi in kanal_listesi:
-    if not discord.utils.get(guild.text_channels, name=k_adi):
-      await guild.create_text_channel(k_adi, category=kategori)
-
-  await interaction.followup.send(
-      "✅ T.C. Kamu altyapısı eksiksiz olarak kuruldu!", ephemeral=True
-  )
-  @bot.tree.command(
-    name="duyuru", description="Belirtilen kanala resmi kamu duyurusu gönderir."
-)
-@app_commands.describe(
-    kanal="Duyurunun atılacağı kanal",
-    baslik="Başlık",
-    mesaj="İçerik",
-    etiketle="Herkese etiket atılsın mı? (Evet/Hayır)",
-)
-@app_commands.default_permissions(manage_messages=True)
-async def duyuru(
-    interaction: discord.Interaction,
-    kanal: discord.TextChannel,
-    baslik: str,
-    mesaj: str,
-    etiketle: bool = False,
-):
+async def yetkilidenetim(interaction: discord.Interaction):
   embed = discord.Embed(
-      title=f"📢 T.C. RESMİ DUYURU: {baslik}",
-      description=mesaj,
-      color=discord.Color.blue(),
-      timestamp=datetime.datetime.now(datetime.timezone.utc),
-  )
-  embed.set_footer(text=f"Yayınlayan: {interaction.user.name}")
-  content_str = "@everyone" if etiketle else ""
-  await kanal.send(content=content_str, embed=embed)
-  await interaction.response.send_message(
-      f"✅ Duyuru başarıyla {kanal.mention} kanalına iletildi.", ephemeral=True
+      title="🛡️ YETKİLİ DENETİM VE PERFORMANS RAPORU", color=discord.Color.gold()
   )
 
+  if not yetkili_puanlari:
+    embed.description = "Henüz kayıtlı yetkili aktivite puanı bulunmuyor."
+  else:
+    for uid, veri in yetkili_puanlari.items():
+      user = interaction.guild.get_member(uid)
+      user_name = user.name if user else f"ID: {uid}"
+      embed.add_field(
+          name=f"Yetkili: {user_name}",
+          value=(
+              f"⭐ Puan: **{veri['puan']}** | ⚠️ Ceza: **{veri['ceza']}**"
+          ),
+          inline=False,
+      )
 
-@bot.tree.command(
-    name="anket", description="Emoji destekli çoktan seçmeli anket açar."
-)
-@app_commands.describe(
-    soru="Anket konusu", secenek1="1. Seçenek", secenek2="2. Seçenek"
-)
-@app_commands.default_permissions(manage_messages=True)
-async def anket(
-    interaction: discord.Interaction,
-    soru: str,
-    secenek1: str,
-    secenek2: str,
-):
-  embed = discord.Embed(
-      title="📊 T.C. KAMU ANKETİ",
-      description=f"**{soru}**\n\n1️⃣ {secenek1}\n2️⃣ {secenek2}",
-      color=discord.Color.dark_gold(),
-      timestamp=datetime.datetime.now(datetime.timezone.utc),
-  )
-  embed.set_footer(text=f"Başlatan: {interaction.user.name}")
-  await interaction.response.send_message("✅ Anket yayınlandı.", ephemeral=True)
-  mesaj = await interaction.channel.send(embed=embed)
-  await mesaj.add_reaction("1️⃣")
-  await mesaj.add_reaction("2️⃣")
-
-
-@bot.tree.command(
-    name="istatistik", description="Sunucu ve bot performans istatistiklerini sunar."
-)
-async def istatistik(interaction: discord.Interaction):
-  guild = interaction.guild
-  toplam_uye = guild.member_count
-  bot_sayisi = sum(1 for m in guild.members if m.bot)
-  insan_sayisi = toplam_uye - bot_sayisi
-  sesli_kullanici = sum(
-      len(vc.members) for vc in guild.voice_channels if vc.members
-  )
-  uptime = int(time.time() - bot_baslangic_zamani)
-
-  embed = discord.Embed(
-      title="📈 T.C. KAMU - SİSTEM İSTATİSTİKLERİ", color=discord.Color.teal()
-  )
-  embed.add_field(name="Toplam Üye", value=str(toplam_uye), inline=True)
-  embed.add_field(
-      name="İnsan / Bot", value=f"👤 {insan_sayisi} | 🤖 {bot_sayisi}", inline=True
-  )
-  embed.add_field(
-      name="Sestekiler", value=f"🔊 {sesli_kullanici} Kişi", inline=True
-  )
-  embed.add_field(
-      name="Gecikme (Ping)", value=f"⚡ {round(bot.latency * 1000)}ms", inline=True
-  )
-  embed.add_field(
-      name="Çalışma Süresi",
-      value=f"⏱️ {uptime // 3600} Saat {(uptime % 3600) // 60} Dakika",
-      inline=True,
-  )
   await interaction.response.send_message(embed=embed)
 
 
-@bot.tree.command(
-    name="yasakli-kelime", description="Küfür filtresi listesine kelime ekler/çıkarır."
-)
-@app_commands.describe(islem="Ekle veya Çıkar", kelime="İşlem yapılacak kelime")
-@app_commands.choices(
-    islem=[
-        app_commands.Choice(name="Ekle", value="ekle"),
-        app_commands.Choice(name="Çıkar", value="cikar"),
-    ]
-)
-@app_commands.default_permissions(administrator=True)
-async def yasaklikelime(
-    interaction: discord.Interaction, islem: str, kelime: str
-):
-  kelime = kelime.lower().strip()
-  if islem == "ekle":
-    if kelime not in dinamik_yasakli_kelimeler:
-      dinamik_yasakli_kelimeler.append(kelime)
-      await interaction.response.send_message(
-          f"✅ **{kelime}** yasaklılara eklendi.", ephemeral=True
-      )
-    else:
-      await interaction.response.send_message(
-          f"❌ **{kelime}** zaten listede var.", ephemeral=True
-      )
-  else:
-    if kelime in dinamik_yasakli_kelimeler:
-      dinamik_yasakli_kelimeler.remove(kelime)
-      await interaction.response.send_message(
-          f"✅ **{kelime}** listeden çıkarıldı.", ephemeral=True
-      )
-    else:
-      await interaction.response.send_message(
-          f"❌ **{kelime}** listede bulunamadı.", ephemeral=True
-      )
+# ==========================================
+# 🧹 5. YENİ EKLENEN ÜST DÜZEY KOMUTLAR (TEMİZLE, EMBED, ÇEKİLİŞ, ROL)
+# ==========================================
 
 
 @bot.tree.command(
-    name="kurallar", description="Sunucunun resmi T.C. Anayasa kurallarını yayınlar."
+    name="temizle", description="Belirtilen miktarda mesajı kanaldan siler."
 )
-@app_commands.default_permissions(administrator=True)
-async def kurallar(interaction: discord.Interaction):
-  embed = discord.Embed(
-      title="📜 T.C. KAMU ANAYASASI VE KURALLARI",
-      description=(
-          "1️⃣ **Saygı ve Disiplin:** Her vatandaşa karşı saygılı olmak"
-          " zorunludur.\n2️⃣ **Küfür ve Hakaret:** Kesinlikle yasaktır, filtre"
-          " otomatik siler.\n3️⃣ **Spam / Reklam:** Her türlü izinsiz reklam"
-          " yasaktır.\n4️⃣ **Telsiz Düzeni:** Ses kanallarında gürültü kirliliği"
-          " yaratılamaz.\n5️⃣ **Yetkili Kararları:** Yönetimin kararları"
-          " esastır."
-      ),
-      color=discord.Color.dark_red(),
-      timestamp=datetime.datetime.now(datetime.timezone.utc),
-  )
-  embed.set_footer(text="T.C. İçişleri Bakanlığı Yönetimi")
-  await interaction.channel.send(embed=embed)
-  await interaction.response.send_message(
-      "✅ Resmi kurallar başarıyla yayınlandı.", ephemeral=True
-  )
-
-
-@bot.tree.command(
-    name="rapor", description="Yönetime gizli bir şikayet veya ihbar bildirir."
-)
-@app_commands.describe(sikayet="Şikayetiniz veya ihbarınız nedir?")
-async def rapor(interaction: discord.Interaction, sikayet: str):
-  embed = discord.Embed(
-      title="🚨 YENİ VATANDAŞ İHBARI / BİLDİRİMİ",
-      color=discord.Color.orange(),
-      timestamp=datetime.datetime.now(datetime.timezone.utc),
-  )
-  embed.add_field(name="Bildiren Vatandaş", value=interaction.user.mention)
-  embed.add_field(name="İçerik", value=sikayet, inline=False)
-
-  await ozel_kanal_logla(interaction.guild, "siberay_log", embed)
-  await interaction.response.send_message(
-      "✅ İhbarınız güvenli bir şekilde Siberay Log birimine iletildi.",
-      ephemeral=True,
-  )
-
-
-@bot.tree.command(name="rol-ver", description="Bir vatandaşa hızlıca rol atar.")
-@app_commands.describe(vatandas="Rol verilecek üye", rol="Verilecek rol")
-@app_commands.default_permissions(manage_roles=True)
-async def rolver(
-    interaction: discord.Interaction, vatandas: discord.Member, rol: discord.Role
-):
-  try:
-    await vatandas.add_roles(rol)
-    await interaction.response.send_message(
-        f"✅ {vatandas.mention} adlı vatandaşa başarıyla {rol.mention} rolü"
-        " verildi.",
-        ephemeral=True,
-    )
-  except Exception as e:
-    await interaction.response.send_message(
-        f"❌ Rol verme başarısız: {e}", ephemeral=True
-    )
-
-
-@bot.tree.command(name="rol-al", description="Bir vatandaşın rolünü alır.")
-@app_commands.describe(vatandas="Rolü alınacak üye", rol="Alınacak rol")
-@app_commands.default_permissions(manage_roles=True)
-async def rolal(
-    interaction: discord.Interaction, vatandas: discord.Member, rol: discord.Role
-):
-  try:
-    await vatandas.remove_roles(rol)
-    await interaction.response.send_message(
-        f"✅ {vatandas.mention} adlı vatandaştan {rol.mention} rolü"
-        " kaldırıldı.",
-        ephemeral=True,
-    )
-  except Exception as e:
-    await interaction.response.send_message(
-        f"❌ Rol alma başarısız: {e}", ephemeral=True
-    )
-
-
-@bot.tree.command(
-    name="yavas-mod", description="Bulunulan kanala mesaj yavaşlatma süresi koyar."
-)
-@app_commands.describe(saniye="Saniye cinsinden yavaş mod (0 = Kapalı)")
-@app_commands.default_permissions(manage_channels=True)
-async def yavasmod(interaction: discord.Interaction, saniye: int):
-  await interaction.channel.edit(slowmode_delay=saniye)
-  await interaction.response.send_message(
-      f"⏳ Bu kanalın yavaş modu **{saniye}** saniye olarak ayarlandı."
-  )
-
-
-@bot.tree.command(name="temizle", description="Belirtilen miktarda mesajı siler.")
-@app_commands.describe(adet="Silinecek mesaj sayısı")
-@app_commands.default_permissions(manage_messages=True)
+@app_commands.describe(adet="Silinecek mesaj sayısı (Örn: 50, 200)")
+@app_commands.default_permissions(
+    manage_messages=True
+)  # Sadece mesajları yönet yetkisi olanlar kullanabilir
 async def temizle(interaction: discord.Interaction, adet: int):
   if adet <= 0:
     await interaction.response.send_message(
         "Lütfen 0'dan büyük bir sayı gir!", ephemeral=True
     )
     return
+
   await interaction.response.defer(ephemeral=True)
-  silinen = await interaction.channel.purge(limit=adet)
-  await interaction.followup.send(
-      f"Başarıyla **{len(silinen)}** evrak imha edildi!", ephemeral=True
-  )
 
-
-@bot.tree.command(name="kilitle", description="Kanalı mesaj gönderimine kapatır.")
-@app_commands.default_permissions(manage_channels=True)
-async def kilitle(interaction: discord.Interaction):
-  await interaction.channel.set_permissions(
-      interaction.guild.default_role, send_messages=False
-  )
-  await interaction.response.send_message(
-      "🔒 Kanal kamu güvenliği gereği kilitlendi."
-  )
-
-
-@bot.tree.command(name="kilit-ac", description="Kanalı tekrar iletişime açar.")
-@app_commands.default_permissions(manage_channels=True)
-async def kilit_ac(interaction: discord.Interaction):
-  await interaction.channel.set_permissions(
-      interaction.guild.default_role, send_messages=True
-  )
-  await interaction.response.send_message(
-      "🔓 Kanal kilidi açıldı, iletişim serbest."
-  )
+  try:
+    silinen = await interaction.channel.purge(limit=adet)
+    await interaction.followup.send(
+        f"Başarıyla **{len(silinen)}** adet mesaj silindi!", ephemeral=True
+    )
+  except Exception as e:
+    await interaction.followup.send(
+        f"Mesajlar silinirken bir hata oluştu: {e}", ephemeral=True
+    )
 
 
 @bot.tree.command(
-    name="sorgula", description="Vatandaşın kimlik ve sicil kaydını gösterir."
+    name="embed", description="Özel şık bir duyuru kutusu (embed) oluşturur."
 )
-async def sorgula(
-    interaction: discord.Interaction, vatandas: discord.Member = None
+@app_commands.describe(baslik="Duyuru Başlığı", icerik="Duyuru Metni")
+@app_commands.default_permissions(manage_messages=True)
+async def embed_olustur(
+    interaction: discord.Interaction, baslik: str, icerik: str
 ):
-  target = vatandas or interaction.user
-  bakiye = kullanici_bakiyeleri.get(target.id, 0)
-  xp_data = kullanici_xp.get(target.id, {"xp": 0, "level": 1})
-  hesap_tarihi = target.created_at.strftime("%d.%m.%Y")
-
   embed = discord.Embed(
-      title="🆔 T.C. VATANDAŞ KİMLİK KAYDI", color=discord.Color.blue()
+      title=baslik,
+      description=icerik,
+      color=discord.Color.blue(),
+      timestamp=datetime.datetime.now(datetime.timezone.utc),
   )
-  embed.set_thumbnail(url=target.display_avatar.url)
-  embed.add_field(name="Kullanıcı", value=target.mention, inline=True)
-  embed.add_field(name="ID", value=f"`{target.id}`", inline=True)
-  embed.add_field(name="Bakiye", value=f"**{bakiye:,} ₺**", inline=True)
-  embed.add_field(
-      name="Rütbe", value=f"Seviye **{xp_data['level']}**", inline=True
+  embed.set_footer(text=f"Yetkili: {interaction.user.name}")
+  await interaction.channel.send(embed=embed)
+  await interaction.response.send_message(
+      "✅ Duyuru başarıyla oluşturuldu.", ephemeral=True
   )
-  embed.add_field(name="Hesap Açılışı", value=hesap_tarihi, inline=True)
+
+
+class CekilisKatilButon(discord.ui.View):
+
+  def __init__(self):
+    super().__init__(timeout=None)
+    self.katilanlar = set()
+
+  @discord.ui.button(
+      label="🎉 Çekilişe Katıl",
+      style=discord.ButtonStyle.green,
+      custom_id="cekilis_katil_btn",
+  )
+  async def katil(
+      self, interaction: discord.Interaction, button: discord.ui.Button
+  ):
+    if interaction.user.id in self.katilanlar:
+      self.katilanlar.remove(interaction.user.id)
+      await interaction.response.send_message(
+          "❌ Çekilişten katılımınız kaldırıldı.", ephemeral=True
+      )
+    else:
+      self.katilanlar.add(interaction.user.id)
+      await interaction.response.send_message(
+          "✅ Çekilişe başarıyla katıldınız!", ephemeral=True
+      )
+
+
+@bot.tree.command(name="cekilis", description="Sunucuda yeni bir çekiliş başlatır.")
+@app_commands.describe(odul="Verilecek ödül nedir?")
+@app_commands.default_permissions(administrator=True)
+async def cekilis(interaction: discord.Interaction, odul: str):
+  embed = discord.Embed(
+      title="🎁 YENİ ÇEKİLİŞ BAŞLADI!",
+      description=(
+          f"Ödül: **{odul}**\n\nKatılmak için aşağıdaki **Çekilişe Katıl**"
+          " butonuna basın!"
+      ),
+      color=discord.Color.gold(),
+  )
+  view = CekilisKatilButon()
+  await interaction.response.send_message(embed=embed, view=view)
+
+
+# ==========================================
+# 💰 6. EKONOMİ VE BORSA SİSTEMİ
+# ==========================================
+
+
+@bot.tree.command(
+    name="cuzdan", description="Merkez Bankası hesap bakiyenizi gösterir."
+)
+async def cuzdan(interaction: discord.Interaction):
+  bakiye = kullanici_bakiyeleri.get(interaction.user.id, 0)
+  embed = discord.Embed(title="💳 MERKEZ BANKASI HESABI", color=discord.Color.green())
+  embed.add_field(name="Bakiye", value=f"**{bakiye:,} ₺**", inline=False)
   await interaction.response.send_message(embed=embed)
 
 
+@bot.tree.command(name="maas", description="Günlük vatandaşlık maaşınızı alırsınız.")
+async def maas(interaction: discord.Interaction):
+  user_id = interaction.user.id
+  today = datetime.date.today()
+  if kullanici_bakiyeleri.get(f"{user_id}_maas") == today:
+    await interaction.response.send_message(
+        "❌ Bugünlük maaşınızı zaten aldınız!", ephemeral=True
+    )
+    return
+  kullanici_bakiyeleri[user_id] = kullanici_bakiyeleri.get(user_id, 0) + 1500
+  kullanici_bakiyeleri[f"{user_id}_maas"] = today
+  await interaction.response.send_message(
+      f"💵 1,500 ₺ maaş yatırıldı! Güncel bakiye:"
+      f" **{kullanici_bakiyeleri[user_id]:,} ₺**"
+  )
+
+
+@bot.tree.command(name="seviye", description="Rütbe ve XP durumunuzu gösterir.")
+async def seviye(interaction: discord.Interaction):
+  data = kullanici_xp.get(interaction.user.id, {"xp": 0, "level": 1})
+  embed = discord.Embed(title="🎖️ KAMU RÜTBE SİSTEMİ", color=discord.Color.gold())
+  embed.add_field(name="Seviye", value=str(data["level"]), inline=True)
+  embed.add_field(
+      name="XP", value=f"{data['xp']} / {data['level'] * 100}", inline=True
+  )
+  await interaction.response.send_message(embed=embed)
+
+
+# BOTU ÇALIŞTIRMA
 token = os.environ.get("DISCORD_TOKEN")
 if token:
   bot.run(token.strip())
 else:
   print("❌ HATA: DISCORD_TOKEN bulunamadı!")
-  
