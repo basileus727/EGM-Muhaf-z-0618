@@ -32,9 +32,23 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 
 MIN_ACCOUNT_AGE_DAYS = 15
 
-# --- SAHTE VERİTABANI (Basit bakiye ve cooldown takibi) ---
+# --- SAHTE VERİTABANI (Bakiye, Cooldown, Seviye ve Yatırım Takibi) ---
 kullanici_bakiyeleri = {}
 maas_cooldown = {}
+kullanici_xp = {}
+kullanici_yatirim = {}
+
+# Log Kanalı Adı (Sunucunuzda bu isimde kanal açarsanız loglar buraya akar)
+LOG_KANAL_ADI = "tc-muhafiz-log"
+
+async def kanal_logla(guild, embed):
+    """Sunucu içinde log kanalına bildirim gönderir."""
+    log_kanali = discord.utils.get(guild.text_channels, name=LOG_KANAL_ADI)
+    if log_kanali:
+        try:
+            await log_kanali.send(embed=embed)
+        except:
+            pass
 
 @bot.event
 async def on_ready():
@@ -77,12 +91,28 @@ async def on_member_join(member):
             pass
         try:
             await member.kick(reason=f"EGM Guard: Hesap yaşı 15 günden küçük ({account_age} gün).")
+            # Log Gönderimi
+            embed = discord.Embed(title="🚨 EGM GUARD - GÜVENLİK KICK İŞLEMİ", color=discord.Color.red(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+            embed.add_field(name="Kullanıcı", value=f"{member.mention} ({member.name})", inline=False)
+            embed.add_field(name="Sebep", value=f"Hesap yaşı 15 günden küçük ({account_age} gün).", inline=False)
+            await kanal_logla(member.guild, embed)
         except discord.Forbidden:
             print(f"⚠️ HATA: {member.name} atılamadı. Bot rolünü kontrol edin.")
     else:
         kayitsiz_rol = discord.utils.get(member.guild.roles, name="Kayıtsız")
         if kayitsiz_rol:
             await member.add_roles(kayitsiz_rol)
+        
+        # Giriş Logu
+        embed = discord.Embed(title="📥 VATANDAŞ GİRİŞİ", color=discord.Color.green(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        embed.add_field(name="Kullanıcı", value=f"{member.mention} sunucuya katıldı.", inline=False)
+        await kanal_logla(member.guild, embed)
+
+@bot.event
+async def on_member_remove(member):
+    embed = discord.Embed(title="📤 VATANDAŞ AYRILDI", color=discord.Color.orange(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+    embed.add_field(name="Kullanıcı", value=f"{member.name} sunucudan ayrıldı.", inline=False)
+    await kanal_logla(member.guild, embed)
 
 KUFUR_LISTESI = ["amk", "aq", "oç", "piç", "sik", "yarrak", "orospu"]
 
@@ -95,9 +125,39 @@ async def on_message(message):
     if any(kufur in msg_content for kufur in KUFUR_LISTESI):
         await message.delete()
         await message.channel.send(f"⚠️ {message.author.mention}, T.C. Kamu Düzeni uyarınca hakaret/küfür içeren mesajlar yasaklanmıştır!", delete_after=5)
+        
+        # Küfür Logu
+        embed = discord.Embed(title="⚠️ KÜFÜR / SANSÜR TESPİTİ", color=discord.Color.dark_red(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        embed.add_field(name="Kullanıcı", value=message.author.mention, inline=True)
+        embed.add_field(name="Kanal", value=message.channel.mention, inline=True)
+        embed.add_field(name="Mesaj İçeriği", value=message.content, inline=False)
+        await kanal_logla(message.guild, embed)
         return
 
+    # --- SEVİYE & XP SİSTEMİ ---
+    user_id = message.author.id
+    current_data = kullanici_xp.get(user_id, {"xp": 0, "level": 1})
+    current_data["xp"] += random.randint(5, 15)
+    
+    next_level_xp = current_data["level"] * 100
+    if current_data["xp"] >= next_level_xp:
+        current_data["level"] += 1
+        current_data["xp"] = 0
+        await message.channel.send(f"🎉 Tebrikler {message.author.mention}, devlet nezdinde **Seviye {current_data['level']}** rütbesine yükseldin!", delete_after=6)
+        
+    kullanici_xp[user_id] = current_data
+
     await bot.process_commands(message)
+
+@bot.event
+async def on_message_delete(message):
+    if message.author.bot:
+        return
+    embed = discord.Embed(title="🗑️ MESAJ SİLİNDİ", color=discord.Color.purple(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+    embed.add_field(name="Kullanıcı", value=message.author.mention, inline=True)
+    embed.add_field(name="Kanal", value=message.channel.mention, inline=True)
+    embed.add_field(name="Silinen Mesaj", value=message.content or "İçerik yok (Fotoğraf/Ek)", inline=False)
+    await kanal_logla(message.guild, embed)
 
 # ==========================================
 # ⚖️ 2. MAHKEME & TICKET (DESTEK) SİSTEMİ
@@ -110,6 +170,12 @@ class DavaKapatButon(discord.ui.View):
     @discord.ui.button(label="⚖️ Davayı/Talebi Sonlandır", style=discord.ButtonStyle.red, custom_id="dava_kapat_btn")
     async def kapat(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("🏛️ Dava dosyası arşivleniyor, kanal 5 saniye içinde kapatılacak...")
+        
+        embed = discord.Embed(title="🏛️ DAVA / TALEP KAPATILDI", color=discord.Color.red(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        embed.add_field(name="Kapatan Yetkili/Kullanıcı", value=interaction.user.mention, inline=False)
+        embed.add_field(name="Kanal", value=interaction.channel.name, inline=False)
+        await kanal_logla(interaction.guild, embed)
+
         await discord.utils.sleep_until(datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=5))
         await interaction.channel.delete()
 
@@ -122,14 +188,12 @@ class MahkemeBasvuruView(discord.ui.View):
         guild = interaction.guild
         user = interaction.user
         
-        # Kanal İzinleri
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
         
-        # Yetkili / Hakim Rolü Varsa Ekle
         hakim_rol = discord.utils.get(guild.roles, name="Hakim") or discord.utils.get(guild.roles, name="Yetkili")
         if hakim_rol:
             overwrites[hakim_rol] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
@@ -150,11 +214,15 @@ class MahkemeBasvuruView(discord.ui.View):
         )
         await ticket_channel.send(embed=embed, view=DavaKapatButon())
         await interaction.response.send_message(f"✅ Dava/Destek kanalınız oluşturuldu: {ticket_channel.mention}", ephemeral=True)
+        
+        log_embed = discord.Embed(title="🏛️ YENİ DAVA / TALEP AÇILDI", color=discord.Color.gold(), timestamp=datetime.datetime.now(datetime.timezone.utc))
+        log_embed.add_field(name="Vatandaş", value=user.mention, inline=True)
+        log_embed.add_field(name="Kanal", value=ticket_channel.mention, inline=True)
+        await kanal_logla(guild, log_embed)
 
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def mahkemekur(ctx):
-    """Yetkilinin Mahkeme Başvuru Panelini Kurmasını Sağlar"""
     embed = discord.Embed(
         title="🏛️ T.C. ADALET BAKANLIĞI MAHKEME VE BAŞVURU PANELİ",
         description="Sunucu içi anlaşmazlıklar, şikayetler veya genel destek talepleriniz için aşağıdaki butona basarak gizli oturum açabilirsiniz.",
@@ -216,7 +284,54 @@ async def borsa(interaction: discord.Interaction):
     
     embed = discord.Embed(title="📊 T.C. BORSA İSTANBUL (BIST 100)", color=discord.Color.blue() if degisim >= 0 else discord.Color.red())
     embed.add_field(name="Endeks Puanı:", value=f"**{bist100}**", inline=True)
-    embed.add_field(name="Günlük Değişim:", value=f"**%{degisim} {durum_emoji}**", inline=True)
+    embed.add_field(name="Günlük Değişim:", value=f"%{degisim} {durum_emoji}", inline=True)
+    
+    await interaction.response.send_message(embed=embed)
+
+# ==========================================
+# 📈 4. SEVİYE & YATIRIM SİSTEMİ
+# ==========================================
+
+@bot.tree.command(name="seviye", description="Devlet nezdindeki rütbenizi ve tecrübe puanınızı (XP) gösterir.")
+async def seviye(interaction: discord.Interaction):
+    user_id = interaction.user.id
+    data = kullanici_xp.get(user_id, {"xp": 0, "level": 1})
+    
+    embed = discord.Embed(title="🎖️ T.C. KAMU RÜTBE VE SEVİYE SİSTEMİ", color=discord.Color.gold())
+    embed.add_field(name="Vatandaş", value=interaction.user.mention, inline=False)
+    embed.add_field(name="Seviye", value=f"**{data['level']}**", inline=True)
+    embed.add_field(name="Mevcut XP", value=f"**{data['xp']} / {data['level'] * 100}**", inline=True)
+    
+    await interaction.response.send_message(embed=embed)
+
+@bot.tree.command(name="yatirim", description="Hazineden hisse senedi alır veya mevcut yatırımınızı satarak kar/zarar edersiniz.")
+async def yatirim(interaction: discord.Interaction, miktar: int):
+    user_id = interaction.user.id
+    bakiye = kullanici_bakiyeleri.get(user_id, 0)
+    
+    if miktar <= 0:
+        await interaction.response.send_message("❌ Yatırım tutarı 0'dan büyük olmalıdır!", ephemeral=True)
+        return
+        
+    if bakiye < miktar:
+        await interaction.response.send_message("❌ Hesabınızda bu yatırımı yapacak yeterli nakit bulunmuyor!", ephemeral=True)
+        return
+        
+    kullanici_bakiyeleri[user_id] -= miktar
+    
+    getiri_orani = round(random.uniform(-0.30, 0.50), 2)
+    kazanc = int(miktar * getiri_orani)
+    yeni_tutar = miktar + kazanc
+    
+    kullanici_bakiyeleri[user_id] += yeni_tutar
+    
+    durum = "📈 Kâr Ettiniz!" if kazanc >= 0 else "📉 Zarar Ettiniz!"
+    renk = discord.Color.green() if kazanc >= 0 else discord.Color.red()
+    
+    embed = discord.Embed(title="🏛️ T.C. KAMU YATIRIM VE BORSA FONU", color=renk)
+    embed.add_field(name="Yatırılan Tutar", value=f"{miktar:,} ₺", inline=False)
+    embed.add_field(name="Piyasa Durumu", value=f"{durum} (Oran: %{getiri_orani * 100})", inline=False)
+    embed.add_field(name="Sonuç / Hesaba Aktarılan", value=f"**{yeni_tutar:,} ₺**", inline=False)
     
     await interaction.response.send_message(embed=embed)
 
