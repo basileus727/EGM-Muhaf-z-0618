@@ -1,8 +1,27 @@
+from flask import Flask
+from threading import Thread
 import discord
 from discord.ext import commands
 import datetime
 import os
 import random
+
+# --- RENDER PORT HATASI ÖNLEME (WEB SERVICE KEEP-ALIVE) ---
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "T.C. Kamu Sistemi ve Bot Aktif!"
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
+
+keep_alive()
+# ---------------------------------------------------------
 
 # Bot Niyetleri (Intents)
 intents = discord.Intents.default()
