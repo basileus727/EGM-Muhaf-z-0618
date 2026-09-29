@@ -9,7 +9,6 @@ from discord.ext import commands
 from flask import Flask
 from threading import Thread
 
-# --- RENDER PORT HATASI ÖNLEME (WEB SERVICE KEEP-ALIVE) ---
 app = Flask("")
 
 
@@ -28,9 +27,7 @@ def keep_alive():
 
 
 keep_alive()
-# ---------------------------------------------------------
 
-# Bot Niyetleri (Intents)
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -41,7 +38,6 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 MIN_ACCOUNT_AGE_DAYS = 15
 bot_baslangic_zamani = time.time()
 
-# --- SAHTE VERİTABANI VE LİSTELER ---
 kullanici_bakiyeleri = {}
 kullanici_xp = {}
 yetkili_puanlari = {}
@@ -56,7 +52,6 @@ dinamik_yasakli_kelimeler = [
     "orospu",
 ]
 
-# --- ÖZEL KANAL TANIMLAMALARI ---
 KANALLAR = {
     "nufus_mudurlugu": "nüfus-müdürlüğü",
     "imha_evraklar": "imha-edilen-evraklar",
@@ -94,11 +89,6 @@ async def on_ready():
     print(f"✅ {len(synced)} Slash komutu hatasız senkronize edildi.")
   except Exception as e:
     print(f"Komut senkronizasyon hatası: {e}")
-
-
-# ==========================================
-# 🛡️ 1. EGM GUARD & NÜFUS SİSTEMLERİ
-# ==========================================
 
 
 @bot.event
@@ -186,11 +176,6 @@ async def on_member_remove(member):
   await ozel_kanal_logla(guild, "nufus_hareketleri", nufus_hareket_embed)
 
 
-# ==========================================
-# 📑 2. EVRAK, KÜFÜR FİLTRESİ VE XP SİSTEMİ
-# ==========================================
-
-
 @bot.event
 async def on_message(message):
   if message.author.bot:
@@ -212,7 +197,7 @@ async def on_message(message):
       pass
 
     embed = discord.Embed(
-        title="⚠️ YASAKLI KELİME TESPİTİ",
+        title="⚠ YASAKLI KELİME TESPİTİ",
         color=discord.Color.dark_red(),
         timestamp=datetime.datetime.now(datetime.timezone.utc),
     )
@@ -272,7 +257,7 @@ async def on_message_edit(before, after):
   if before.author.bot or before.content == after.content:
     return
   embed = discord.Embed(
-      title="✏️ DÜZENLENEN EVRAK",
+      title="✏ DÜZENLENEN EVRAK",
       color=discord.Color.gold(),
       timestamp=datetime.datetime.now(datetime.timezone.utc),
   )
@@ -281,11 +266,6 @@ async def on_message_edit(before, after):
   embed.add_field(name="Eski Metin", value=before.content or "Boş", inline=False)
   embed.add_field(name="Yeni Metin", value=after.content or "Boş", inline=False)
   await ozel_kanal_logla(before.guild, "evrak_duzenleme", embed)
-
-
-# ==========================================
-# 🔊 3. TELSİZ DİNLEME (SES KANALI) SİSTEMİ
-# ==========================================
 
 
 @bot.event
@@ -320,11 +300,6 @@ async def on_voice_state_update(member, before, after):
     embed.add_field(name="Ayrıldığı Kanal", value=before.channel.name, inline=True)
     embed.add_field(name="Süre", value=dakika_str, inline=False)
     await ozel_kanal_logla(guild, "telsiz_dinleme", embed)
-
-
-# ==========================================
-# 🏛️ 4. ADALET & MAHKEME SİSTEMİ
-# ==========================================
 
 
 class DavaKapatButon(discord.ui.View):
@@ -400,11 +375,6 @@ async def mahkemekur(ctx):
   await ctx.send(embed=embed, view=MahkemeBasvuruView())
 
 
-# ==========================================
-# 🚀 5. PROFESYONEL SUNUCU YÖNETİM KOMUTLARI
-# ==========================================
-
-
 @bot.tree.command(
     name="kurulum",
     description="Sunucu için gerekli tüm T.C. Kamu kanal ve rollerini kurar.",
@@ -436,9 +406,7 @@ async def kurulum(interaction: discord.Interaction):
   await interaction.followup.send(
       "✅ T.C. Kamu altyapısı eksiksiz olarak kuruldu!", ephemeral=True
   )
-
-
-@bot.tree.command(
+  @bot.tree.command(
     name="duyuru", description="Belirtilen kanala resmi kamu duyurusu gönderir."
 )
 @app_commands.describe(
@@ -608,7 +576,9 @@ async def rapor(interaction: discord.Interaction, sikayet: str):
   await interaction.response.send_message(
       "✅ İhbarınız güvenli bir şekilde Siberay Log birimine iletildi.",
       ephemeral=True,
-    )
+  )
+
+
 @bot.tree.command(name="rol-ver", description="Bir vatandaşa hızlıca rol atar.")
 @app_commands.describe(vatandas="Rol verilecek üye", rol="Verilecek rol")
 @app_commands.default_permissions(manage_roles=True)
@@ -653,13 +623,10 @@ async def rolal(
 @app_commands.describe(saniye="Saniye cinsinden yavaş mod (0 = Kapalı)")
 @app_commands.default_permissions(manage_channels=True)
 async def yavasmod(interaction: discord.Interaction, saniye: int):
-  await interaction.channel.slowmode_delay = saniye
+  await interaction.channel.edit(slowmode_delay=saniye)
   await interaction.response.send_message(
       f"⏳ Bu kanalın yavaş modu **{saniye}** saniye olarak ayarlandı."
   )
-
-
-# --- TEMEL MODERASYON KOMUTLARI ---
 
 
 @bot.tree.command(name="temizle", description="Belirtilen miktarda mesajı siler.")
@@ -725,7 +692,6 @@ async def sorgula(
   await interaction.response.send_message(embed=embed)
 
 
-# BOTU ÇALIŞTIRMA
 token = os.environ.get("DISCORD_TOKEN")
 if token:
   bot.run(token.strip())
